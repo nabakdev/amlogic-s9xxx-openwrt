@@ -25,6 +25,7 @@
 # find_openwrt       : Find OpenWrt file (openwrt-armvirt/*rootfs.tar.gz)
 # download_depends   : Download the dependency files
 # query_version      : Query the latest kernel version
+# check_kernel       : Check kernel files integrity
 # download_kernel    : Download the latest kernel
 #
 # confirm_version    : Confirm version type
@@ -329,7 +330,25 @@ query_version() {
     done
 
     echo -e "${INFO} The latest version of the stable_kernel: [ ${stable_kernel[*]} ]"
-    echo -e "${INFO} The latest version of the rk3588_kernel: [ ${rk3588_kernel[*]} ]"
+    echo -e "${INFO} The latest version of the rk3588_kernel: [ ${rk3588_kernel[*]} ]\n"
+}
+
+check_kernel() {
+    [[ -n "${1}" ]] && check_path="${1}" || error_msg "Invalid kernel path to check."
+    check_files=($(cat "${check_path}/sha256sums" | awk '{print $2}'))
+    m="1"
+    for cf in ${check_files[*]}; do
+        {
+            # Check if file exists
+            [[ -s "${check_path}/${cf}" ]] || error_msg "The [ ${cf} ] file is missing."
+            # Check if the file sha256sum is correct
+            tmp_sha256sum="$(sha256sum "${check_path}/${cf}" | awk '{print $1}')"
+            tmp_checkcode="$(cat ${check_path}/sha256sums | grep ${cf} | awk '{print $1}')"
+            [[ "${tmp_sha256sum}" == "${tmp_checkcode}" ]] || error_msg "[ ${cf} ]: sha256sum verification failed."
+            let m++
+        }
+    done
+    echo -e "${INFO} All [ ${#check_files[*]} ] kernel files are sha256sum checked to be complete.\n"
 }
 
 download_kernel() {
@@ -355,6 +374,9 @@ download_kernel() {
                 else
                     echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel is in the local directory."
                 fi
+
+                # If the kernel contains the sha256sums file, check the files integrity
+                [[ -f "${kernel_path}/${k}/${kernel_var}/sha256sums" ]] && check_kernel "${kernel_path}/${k}/${kernel_var}"
 
                 let i++
             done
@@ -532,12 +554,13 @@ replace_kernel() {
     process_msg " (3/5) Replace the kernel."
     cd ${current_path}
 
-    # Replace the kernel
+    # Determine custom kernel filename
     kernel_boot="$(ls ${kernel_path}/${kd}/${kernel}/boot-${kernel}*.tar.gz 2>/dev/null | head -n 1)"
-    kernel_dtb="$(ls ${kernel_path}/${kd}/${kernel}/dtb-${PLATFORM}-${kernel}*.tar.gz 2>/dev/null | head -n 1)"
-    kernel_modules="$(ls ${kernel_path}/${kd}/${kernel}/modules-${kernel}*.tar.gz 2>/dev/null | head -n 1)"
-    kernel_name="${kernel_boot##*/}" && kernel_name="${kernel_name/boot-/}" && kernel_name="${kernel_name/.tar.gz/}"
-    [[ -n "${kernel_boot}" && -n "${kernel_dtb}" && -n "${kernel_modules}" ]] || error_msg "The 3 kernel missing."
+    kernel_name="${kernel_boot##*/}" && kernel_name="${kernel_name:5:-7}"
+    [[ -n "${kernel_name}" ]] || error_msg "Missing kernel files for [ ${kernel} ]"
+    kernel_dtb="${kernel_path}/${kd}/${kernel}/dtb-${PLATFORM}-${kernel_name}.tar.gz"
+    kernel_modules="${kernel_path}/${kd}/${kernel}/modules-${kernel_name}.tar.gz"
+    [[ -s "${kernel_boot}" && -s "${kernel_dtb}" && -s "${kernel_modules}" ]] || error_msg "The 3 kernel missing."
 
     # 01. For /boot five files
     tar -xzf ${kernel_boot} -C ${tag_bootfs}
