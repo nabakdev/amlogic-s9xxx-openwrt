@@ -73,7 +73,7 @@ script_repo="https://github.com/ophub/luci-app-amlogic/tree/main/luci-app-amlogi
 script_repo="${script_repo//tree\/main/trunk}"
 
 # Kernel files download repository
-kernel_repo="https://github.com/ophub/kernel/tree/main/pub"
+kernel_repo="https://github.com/nabakdev/sibondt-kernel/tree/main/pub"
 # Set stable kernel directory: [ stable ], rk3588 kernel directory: [ rk3588 ]
 kernel_dir=("stable" "rk3588")
 # Set the list of kernels used by default
