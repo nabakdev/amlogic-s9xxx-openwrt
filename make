@@ -55,7 +55,7 @@ firmware_path="${common_files}/lib/firmware"
 model_conf="${common_files}/etc/model_database.conf"
 model_txt="${common_files}/etc/model_database.txt"
 
-# Add custom openwrt firmware information
+# Add custom OpenWrt firmware information
 op_release="etc/flippy-openwrt-release"
 
 # Dependency files download repository
@@ -212,7 +212,7 @@ find_openwrt() {
     cd ${current_path}
     echo -e "${STEPS} Start searching for OpenWrt file..."
 
-    # Find whether the openwrt file exists
+    # Find whether the OpenWrt file exists
     openwrt_file_name="$(ls ${openwrt_path}/${openwrt_rootfs_file} 2>/dev/null | head -n 1 | awk -F "/" '{print $NF}')"
     if [[ -n "${openwrt_file_name}" ]]; then
         echo -e "${INFO} OpenWrt file: [ ${openwrt_file_name} ]"
@@ -220,7 +220,7 @@ find_openwrt() {
         error_msg "There is no [ ${openwrt_rootfs_file} ] file in the [ ${openwrt_path} ] directory."
     fi
 
-    # Extract the openwrt release information file
+    # Extract the OpenWrt release information file
     source_codename=""
     source_release_file="etc/openwrt_release"
     temp_dir="$(mktemp -d)"
@@ -390,22 +390,6 @@ download_kernel() {
 confirm_version() {
     cd ${current_path}
 
-    # Find [ the first ] configuration information with [ the same BOARD name ] and [ BUILD as yes ] in the ${model_conf} file.
-    [[ -f "${model_conf}" ]] || error_msg "[ ${model_conf} ] file is missing!"
-    board_conf="$(cat ${model_conf} | sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' | grep -E "^[^#].*:${board}:yes$" | head -n 1)"
-    [[ -n "${board_conf}" ]] || error_msg "[ ${board} ] config is missing!"
-
-    # 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION  9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
-    SOC="$(echo ${board_conf} | awk -F':' '{print $3}')"
-    FDTFILE="$(echo ${board_conf} | awk -F':' '{print $4}')"
-    UBOOT_OVERLOAD="$(echo ${board_conf} | awk -F':' '{print $5}')"
-    MAINLINE_UBOOT="$(echo ${board_conf} | awk -F':' '{print $6}')" && MAINLINE_UBOOT="${MAINLINE_UBOOT##*/}"
-    BOOTLOADER_IMG="$(echo ${board_conf} | awk -F':' '{print $7}')" && BOOTLOADER_IMG="${BOOTLOADER_IMG##*/}"
-    KERNEL_BRANCH="$(echo ${board_conf} | awk -F':' '{print $9}')"
-    PLATFORM="$(echo ${board_conf} | awk -F':' '{print $10}')"
-    FAMILY="$(echo ${board_conf} | awk -F':' '{print $11}')"
-    BOOT_CONF="$(echo ${board_conf} | awk -F':' '{print $12}')"
-
     # Confirm BOOT_UUID
     BOOT_UUID="$(cat /proc/sys/kernel/random/uuid)"
     [[ -z "${BOOT_UUID}" ]] && BOOT_UUID="$(uuidgen)"
@@ -414,6 +398,30 @@ confirm_version() {
     ROOTFS_UUID="$(cat /proc/sys/kernel/random/uuid)"
     [[ -z "${ROOTFS_UUID}" ]] && ROOTFS_UUID="$(uuidgen)"
     [[ -z "${ROOTFS_UUID}" ]] && error_msg "The uuidgen is invalid, cannot continue."
+
+    # Find [ the first ] configuration information with [ the same BOARD name ] and [ BUILD as yes ] in the ${model_conf} file.
+    [[ -f "${model_conf}" ]] || error_msg "[ ${model_conf} ] file is missing!"
+    board_conf="$(cat ${model_conf} | sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' | grep -E "^[^#].*:${board}:yes$" | head -n 1)"
+    [[ -n "${board_conf}" ]] || error_msg "[ ${board} ] config is missing!"
+
+    # 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION  9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
+    # Column 5, called <UBOOT_OVERLOAD> in Amlogic and <TRUST_IMG> in Rockchip and Allwinner
+    SOC="$(echo ${board_conf} | awk -F':' '{print $3}')"
+    FDTFILE="$(echo ${board_conf} | awk -F':' '{print $4}')"
+    UBOOT_OVERLOAD="$(echo ${board_conf} | awk -F':' '{print $5}')"
+    TRUST_IMG="${UBOOT_OVERLOAD}"
+    MAINLINE_UBOOT="$(echo ${board_conf} | awk -F':' '{print $6}')" && MAINLINE_UBOOT="${MAINLINE_UBOOT##*/}"
+    BOOTLOADER_IMG="$(echo ${board_conf} | awk -F':' '{print $7}')" && BOOTLOADER_IMG="${BOOTLOADER_IMG##*/}"
+    KERNEL_BRANCH="$(echo ${board_conf} | awk -F':' '{print $9}')"
+    PLATFORM="$(echo ${board_conf} | awk -F':' '{print $10}')"
+    FAMILY="$(echo ${board_conf} | awk -F':' '{print $11}')"
+    BOOT_CONF="$(echo ${board_conf} | awk -F':' '{print $12}')"
+
+    # Check whether the key parameters are correct
+    [[ -n "${PLATFORM}" ]] || error_msg "Invalid PLATFORM parameter: [ ${PLATFORM} ]"
+    # Set supported platform name
+    support_platform=("amlogic" "rockchip" "allwinner")
+    [[ "${support_platform[*]}" =~ "${PLATFORM}" ]] || error_msg "[ ${PLATFORM} ] not supported."
 
     # Define platform variables for [ Amlogic ] boxes
     [[ "${PLATFORM}" == "amlogic" ]] && {
@@ -466,17 +474,19 @@ confirm_version() {
 }
 
 make_image() {
-    process_msg " (1/5) Make openwrt image."
+    process_msg " (1/5) Make OpenWrt image."
     cd ${current_path}
 
-    # Set openwrt filename
+    # Set OpenWrt filename
     build_image_file="${out_path}/openwrt${source_codename}_${PLATFORM}_${board}_k${kernel}_$(date +"%Y.%m.%d").img"
     rm -f ${build_image_file}
 
     [[ -d "${out_path}" ]] || mkdir -p ${out_path}
 
+    # Reserve bootloader write area (Unit: MiB)
     [[ "${PLATFORM}" == "amlogic" ]] && SKIP_MB="4"
-    [[ "${PLATFORM}" == "rockchip" || "${PLATFORM}" == "allwinner" ]] && SKIP_MB="16"
+    [[ "${PLATFORM}" == "rockchip" ]] && SKIP_MB="16"
+    [[ "${PLATFORM}" == "allwinner" ]] && SKIP_MB="16"
 
     IMG_SIZE="$((SKIP_MB + BOOT_MB + ROOT_MB))"
 
@@ -486,7 +496,7 @@ make_image() {
     parted -s ${build_image_file} mkpart primary ${bootfs_type} $((SKIP_MB))MiB $((SKIP_MB + BOOT_MB - 1))MiB 2>/dev/null
     parted -s ${build_image_file} mkpart primary btrfs $((SKIP_MB + BOOT_MB))MiB 100% 2>/dev/null
 
-    # Mount the openwrt image file
+    # Mount the OpenWrt image file
     loop_new="$(losetup -P -f --show "${build_image_file}")"
     [[ -n "${loop_new}" ]] || error_msg "losetup ${build_image_file} failed."
 
@@ -515,6 +525,13 @@ make_image() {
     [[ "${PLATFORM}" == "rockchip" ]] && {
         bootloader_path="${uboot_path}/${PLATFORM}/${board}"
         if [[ -n "${BOOTLOADER_IMG}" && -f "${bootloader_path}/${BOOTLOADER_IMG}" ]] &&
+            [[ -n "${MAINLINE_UBOOT}" && -f "${bootloader_path}/${MAINLINE_UBOOT}" ]] &&
+            [[ -n "${TRUST_IMG}" && -f "${bootloader_path}/${TRUST_IMG}" ]]; then
+            dd if="${bootloader_path}/${BOOTLOADER_IMG}" of="${loop_new}" conv=fsync,notrunc bs=512 seek=64 2>/dev/null
+            dd if="${bootloader_path}/${MAINLINE_UBOOT}" of="${loop_new}" conv=fsync,notrunc bs=512 seek=16384 2>/dev/null
+            dd if="${bootloader_path}/${TRUST_IMG}" of="${loop_new}" conv=fsync,notrunc bs=512 seek=24576 2>/dev/null
+            #echo -e "${INFO} For [ ${board} ] write bootloader: ${TRUST_IMG}"
+        elif [[ -n "${BOOTLOADER_IMG}" && -f "${bootloader_path}/${BOOTLOADER_IMG}" ]] &&
             [[ -n "${MAINLINE_UBOOT}" && -f "${bootloader_path}/${MAINLINE_UBOOT}" ]]; then
             dd if="${bootloader_path}/${BOOTLOADER_IMG}" of="${loop_new}" conv=fsync,notrunc bs=512 seek=64 2>/dev/null
             dd if="${bootloader_path}/${MAINLINE_UBOOT}" of="${loop_new}" conv=fsync,notrunc bs=512 seek=16384 2>/dev/null
@@ -541,10 +558,10 @@ make_image() {
 }
 
 extract_openwrt() {
-    process_msg " (2/5) Extract openwrt files."
+    process_msg " (2/5) Extract OpenWrt files."
     cd ${current_path}
 
-    # Create openwrt mirror partition
+    # Create OpenWrt mirror partition
     tag_bootfs="${tmp_path}/${kernel}/${board}/bootfs"
     tag_rootfs="${tmp_path}/${kernel}/${board}/rootfs"
     mkdir -p ${tag_bootfs} ${tag_rootfs}
@@ -564,7 +581,7 @@ extract_openwrt() {
     # Create snapshot directory
     btrfs subvolume create ${tag_rootfs}/etc >/dev/null 2>&1
 
-    # Unzip the openwrt package
+    # Unzip the OpenWrt package
     tar -xzf ${openwrt_path}/${openwrt_file_name} -C ${tag_rootfs}
     rm -rf ${tag_rootfs}/lib/modules/*
     rm -f ${tag_rootfs}/rom/sbin/firstboot
@@ -677,23 +694,26 @@ refactor_files() {
     echo "PLATFORM='${PLATFORM}'" >>${op_release}
     echo "SOC='${SOC}'" >>${op_release}
     echo "FDTFILE='${FDTFILE}'" >>${op_release}
-    echo "UBOOT_OVERLOAD='${UBOOT_OVERLOAD}'" >>${op_release}
-    echo "MAINLINE_UBOOT='/lib/u-boot/${MAINLINE_UBOOT}'" >>${op_release}
-    echo "ANDROID_UBOOT='/lib/u-boot/${BOOTLOADER_IMG}'" >>${op_release}
     echo "FAMILY='${FAMILY}'" >>${op_release}
     echo "BOARD='${board}'" >>${op_release}
     echo "KERNEL_VERSION='${kernel}'" >>${op_release}
     echo "KERNEL_BRANCH='${KERNEL_BRANCH}'" >>${op_release}
     echo "BOOT_CONF='${BOOT_CONF}'" >>${op_release}
+    echo "PACKAGED_DATE='$(date +%Y-%m-%d)'" >>${op_release}
+    echo "MAINLINE_UBOOT='/lib/u-boot/${MAINLINE_UBOOT}'" >>${op_release}
+    echo "ANDROID_UBOOT='/lib/u-boot/${BOOTLOADER_IMG}'" >>${op_release}
+    if [[ "${PLATFORM}" == "amlogic" ]]; then
+        echo "UBOOT_OVERLOAD='${UBOOT_OVERLOAD}'" >>${op_release}
+    else
+        echo "TRUST_IMG='${TRUST_IMG}'" >>${op_release}
+    fi
 
     # Add firmware version information to the terminal page
     [[ -f "etc/banner" ]] && {
-        op_version=$(echo $(ls lib/modules/ 2>/dev/null))
-        op_production_date=$(date +%Y-%m-%d)
         echo " Install OpenWrt: System → Amlogic Service → Install OpenWrt" >>etc/banner
         echo " Update  OpenWrt: System → Amlogic Service → Online  Update" >>etc/banner
-        echo " Board: ${bd_name} | OpenWrt Kernel: ${op_version}" >>etc/banner
-        echo " Production Date: ${op_production_date}" >>etc/banner
+        echo " Board: ${bd_name} | OpenWrt Kernel: ${kernel_name}" >>etc/banner
+        echo " Production Date: $(date +%Y-%m-%d)" >>etc/banner
         echo "───────────────────────────────────────────────────────────────────────" >>etc/banner
     }
 
@@ -835,7 +855,7 @@ clean_tmp() {
     process_msg " (5/5) Cleanup tmp files."
     cd ${current_path}
 
-    # Unmount the openwrt image file
+    # Unmount the OpenWrt image file
     umount -f ${tag_bootfs} 2>/dev/null
     umount -f ${tag_rootfs} 2>/dev/null
     losetup -d ${loop_new} 2>/dev/null
@@ -849,7 +869,7 @@ clean_tmp() {
 
     cd ${out_path}
 
-    # Compress the openwrt image file
+    # Compress the OpenWrt image file
     pigz -f *.img && sync
 
     cd ${current_path}
@@ -921,7 +941,7 @@ loop_make() {
 
     cd ${out_path}
 
-    # Backup the openwrt file
+    # Backup the OpenWrt file
     cp -f ${openwrt_path}/${openwrt_file_name} .
 
     # Generate sha256sum check file
