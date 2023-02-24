@@ -870,7 +870,7 @@ clean_tmp() {
     cd ${out_path}
 
     # Compress the OpenWrt image file
-    pigz -f *.img && sync
+    pigz -9 -f *.img && sync
 
     cd ${current_path}
 
