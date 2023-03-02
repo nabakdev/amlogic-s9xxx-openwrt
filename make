@@ -32,7 +32,8 @@
 # make_image         : Making OpenWrt file
 # extract_openwrt    : Extract OpenWrt files
 # replace_kernel     : Replace the kernel
-# refactor_files     : Refactor related files
+# refactor_bootfs    : Refactor bootfs files
+# refactor_rootfs    : Refactor rootfs files
 # clean_tmp          : Clear temporary files
 #
 # loop_make          : Loop to make OpenWrt files
@@ -88,9 +89,9 @@ auto_kernel="true"
 # 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION  9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
 build_openwrt=($(cat ${model_conf} | sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' | grep -E "^[^#].*:yes$" | awk -F':' '{print $13}' | sort | uniq | xargs))
 
-# Set OpenWrt firmware size (Unit: MiB, BOOT_MB >= 256, ROOT_MB >= 512)
-BOOT_MB="256"
-ROOT_MB="1024"
+# Set OpenWrt firmware size (Unit: MiB, boot_mb >= 256, root_mb >= 512)
+boot_mb="256"
+root_mb="1024"
 
 # Get gh_token for api.github.com
 gh_token=""
@@ -184,7 +185,7 @@ init_var() {
             ;;
         -s | --Size)
             if [[ -n "${2}" && "${2}" -ge "512" ]]; then
-                ROOT_MB="${2}"
+                root_mb="${2}"
                 shift
             else
                 error_msg "Invalid -s parameter [ ${2} ]!"
@@ -401,15 +402,6 @@ download_kernel() {
 confirm_version() {
     cd ${current_path}
 
-    # Confirm BOOT_UUID
-    BOOT_UUID="$(cat /proc/sys/kernel/random/uuid)"
-    [[ -z "${BOOT_UUID}" ]] && BOOT_UUID="$(uuidgen)"
-    [[ -z "${BOOT_UUID}" ]] && error_msg "The uuidgen is invalid, cannot continue."
-    # Confirm ROOTFS_UUID
-    ROOTFS_UUID="$(cat /proc/sys/kernel/random/uuid)"
-    [[ -z "${ROOTFS_UUID}" ]] && ROOTFS_UUID="$(uuidgen)"
-    [[ -z "${ROOTFS_UUID}" ]] && error_msg "The uuidgen is invalid, cannot continue."
-
     # Find [ the first ] configuration information with [ the same BOARD name ] and [ BUILD as yes ] in the ${model_conf} file.
     [[ -f "${model_conf}" ]] || error_msg "[ ${model_conf} ] file is missing!"
     board_conf="$(cat ${model_conf} | sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' | grep -E "^[^#].*:${board}:yes$" | head -n 1)"
@@ -434,74 +426,60 @@ confirm_version() {
     # Set supported platform name
     support_platform=("amlogic" "rockchip" "allwinner")
     [[ -n "$(echo "${support_platform[*]}" | grep -w "${PLATFORM}")" ]] || error_msg "[ ${PLATFORM} ] not supported."
-
-    # Define platform variables for [ Amlogic ] boxes
-    [[ "${PLATFORM}" == "amlogic" ]] && {
-        # Set up the welcome board
-        bd_name="Amlogic ${SOC}"
-        # Set Armbian image file parameters
-        partition_table_type="msdos"
-        bootfs_type="fat32"
-        # Set directory name
-        platform_bootfs="${platform_files}/${PLATFORM}/bootfs"
-        platform_rootfs="${platform_files}/${PLATFORM}/rootfs"
-        bootloader_dir="${uboot_path}/${PLATFORM}/bootloader"
-        # Set the type of file system
-        uenv_rootdev="UUID=${ROOTFS_UUID} rootflags=compress=zstd:6 rootfstype=btrfs"
-        fstab_string="discard,defaults,noatime,compress=zstd:6"
-    }
-
-    # Define platform variables for [ Rockchip / Allwinner ] boxes
-    [[ "${PLATFORM}" == "rockchip" || "${PLATFORM}" == "allwinner" ]] && {
-        # Set up the welcome board
-        bd_name="${board}"
-        # Set Armbian image file parameters
-        [[ "${PLATFORM}" == "rockchip" ]] && partition_table_type="gpt"
-        [[ "${PLATFORM}" == "allwinner" ]] && partition_table_type="msdos"
-        bootfs_type="ext4"
-        # Set directory name
-        platform_bootfs="${platform_files}/${PLATFORM}/bootfs"
-        platform_rootfs="${platform_files}/${PLATFORM}/rootfs"
-        bootloader_dir="${uboot_path}/${PLATFORM}/${board}"
-        # Set the type of file system
-        armbianenv_rootflags="compress=zstd:6"
-        armbianenv_rootdev="UUID=${ROOTFS_UUID}"
-        fstab_string="discard,defaults,noatime,compress=zstd:6"
-    }
 }
 
 make_image() {
-    process_msg " (1/5) Make OpenWrt image."
+    process_msg " (1/6) Make OpenWrt image."
     cd ${current_path}
 
+    # Set Armbian image file parameters
+    [[ "${PLATFORM}" == "amlogic" ]] && {
+        skip_mb="4"
+        partition_table_type="msdos"
+        bootfs_type="fat32"
+    }
+    [[ "${PLATFORM}" == "rockchip" ]] && {
+        skip_mb="16"
+        partition_table_type="gpt"
+        bootfs_type="ext4"
+    }
+    [[ "${PLATFORM}" == "allwinner" ]] && {
+        skip_mb="16"
+        partition_table_type="msdos"
+        bootfs_type="fat32"
+    }
+
     # Set OpenWrt filename
+    [[ -d "${out_path}" ]] || mkdir -p ${out_path}
     build_image_file="${out_path}/openwrt${source_codename}_${PLATFORM}_${board}_k${kernel}_$(date +"%Y.%m.%d").img"
     rm -f ${build_image_file}
 
-    [[ -d "${out_path}" ]] || mkdir -p ${out_path}
-
-    # Reserve bootloader write area (Unit: MiB)
-    [[ "${PLATFORM}" == "amlogic" ]] && SKIP_MB="4"
-    [[ "${PLATFORM}" == "rockchip" ]] && SKIP_MB="16"
-    [[ "${PLATFORM}" == "allwinner" ]] && SKIP_MB="16"
-
-    IMG_SIZE="$((SKIP_MB + BOOT_MB + ROOT_MB))"
-
+    IMG_SIZE="$((skip_mb + boot_mb + root_mb))"
     truncate -s ${IMG_SIZE}M ${build_image_file} >/dev/null 2>&1
 
     parted -s ${build_image_file} mklabel ${partition_table_type} 2>/dev/null
-    parted -s ${build_image_file} mkpart primary ${bootfs_type} $((SKIP_MB))MiB $((SKIP_MB + BOOT_MB - 1))MiB 2>/dev/null
-    parted -s ${build_image_file} mkpart primary btrfs $((SKIP_MB + BOOT_MB))MiB 100% 2>/dev/null
+    parted -s ${build_image_file} mkpart primary ${bootfs_type} $((skip_mb))MiB $((skip_mb + boot_mb - 1))MiB 2>/dev/null
+    parted -s ${build_image_file} mkpart primary btrfs $((skip_mb + boot_mb))MiB 100% 2>/dev/null
 
     # Mount the OpenWrt image file
     loop_new="$(losetup -P -f --show "${build_image_file}")"
     [[ -n "${loop_new}" ]] || error_msg "losetup ${build_image_file} failed."
 
+    # Confirm BOOT_UUID
+    BOOT_UUID="$(cat /proc/sys/kernel/random/uuid)"
+    [[ -z "${BOOT_UUID}" ]] && BOOT_UUID="$(uuidgen)"
+    [[ -z "${BOOT_UUID}" ]] && error_msg "The uuidgen is invalid, cannot continue."
+    # Confirm ROOTFS_UUID
+    ROOTFS_UUID="$(cat /proc/sys/kernel/random/uuid)"
+    [[ -z "${ROOTFS_UUID}" ]] && ROOTFS_UUID="$(uuidgen)"
+    [[ -z "${ROOTFS_UUID}" ]] && error_msg "The uuidgen is invalid, cannot continue."
+
     # Format bootfs partition
-    [[ "${PLATFORM}" == "amlogic" ]] && mkfs.vfat -F 32 -n "BOOT" ${loop_new}p1 >/dev/null 2>&1
-    [[ "${PLATFORM}" == "rockchip" || "${PLATFORM}" == "allwinner" ]] && {
+    if [[ "${bootfs_type}" == "fat32" ]]; then
+        mkfs.vfat -F 32 -n "BOOT" ${loop_new}p1 >/dev/null 2>&1
+    else
         mkfs.ext4 -F -q -U ${BOOT_UUID} -L "BOOT" -b 4k -m 0 ${loop_new}p1 >/dev/null 2>&1
-    }
+    fi
 
     # Format rootfs partition
     mkfs.btrfs -f -U ${ROOTFS_UUID} -L "ROOTFS" -m single ${loop_new}p2 >/dev/null 2>&1
@@ -557,7 +535,7 @@ make_image() {
 }
 
 extract_openwrt() {
-    process_msg " (2/5) Extract OpenWrt files."
+    process_msg " (2/6) Extract OpenWrt files."
     cd ${current_path}
 
     # Create OpenWrt mirror partition
@@ -566,7 +544,7 @@ extract_openwrt() {
     mkdir -p ${tag_bootfs} ${tag_rootfs}
 
     # Mount bootfs
-    if [[ "${PLATFORM}" == "amlogic" ]]; then
+    if [[ "${bootfs_type}" == "fat32" ]]; then
         mount -t vfat -o discard ${loop_new}p1 ${tag_bootfs}
     else
         mount -t ext4 -o discard ${loop_new}p1 ${tag_bootfs}
@@ -585,25 +563,31 @@ extract_openwrt() {
     rm -rf ${tag_rootfs}/lib/modules/*
     rm -f ${tag_rootfs}/rom/sbin/firstboot
 
-    # Copy the same files
+    # Copy the common files
     [[ -d "${common_files}" ]] && cp -rf ${common_files}/* ${tag_rootfs}
+
+    # Copy the platform files
+    platform_bootfs="${platform_files}/${PLATFORM}/bootfs"
+    platform_rootfs="${platform_files}/${PLATFORM}/rootfs"
     [[ -d "${platform_bootfs}" ]] && cp -rf ${platform_bootfs}/* ${tag_bootfs}
     [[ -d "${platform_rootfs}" ]] && cp -rf ${platform_rootfs}/* ${tag_rootfs}
 
     # Copy the different files
-    [[ -d "${different_files}/${board}/bootfs" ]] && cp -rf ${different_files}/${board}/bootfs/* ${tag_bootfs}
-    [[ -d "${different_files}/${board}/rootfs" ]] && cp -rf ${different_files}/${board}/rootfs/* ${tag_rootfs}
+    different_bootfs="${different_files}/${board}/bootfs"
+    different_rootfs="${different_files}/${board}/rootfs"
+    [[ -d "${different_bootfs}" ]] && cp -rf ${different_bootfs}/* ${tag_bootfs}
+    [[ -d "${different_rootfs}" ]] && cp -rf ${different_rootfs}/* ${tag_rootfs}
 
     # Copy the bootloader files
     [[ -d "${tag_rootfs}/lib/u-boot" ]] || mkdir -p "${tag_rootfs}/lib/u-boot"
-    [[ -d "${bootloader_dir}" ]] && cp -rf ${bootloader_dir}/* ${tag_rootfs}/lib/u-boot
+    [[ -d "${bootloader_path}" ]] && cp -rf ${bootloader_path}/* ${tag_rootfs}/lib/u-boot
 
     # Copy the overload files
     [[ "${PLATFORM}" == "amlogic" ]] && cp -f ${uboot_path}/${PLATFORM}/overload/* ${tag_bootfs}
 }
 
 replace_kernel() {
-    process_msg " (3/5) Replace the kernel."
+    process_msg " (3/6) Replace the kernel."
     cd ${current_path}
 
     # Determine custom kernel filename
@@ -616,15 +600,15 @@ replace_kernel() {
 
     # 01. For /boot five files
     tar -xzf ${kernel_boot} -C ${tag_bootfs}
-    [[ "${PLATFORM}" == "amlogic" ]] && (cd ${tag_bootfs} && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} zImage)
-    [[ "${PLATFORM}" == "rockchip" || "${PLATFORM}" == "allwinner" ]] && (cd ${tag_bootfs} && ln -sf uInitrd-${kernel_name} uInitrd && ln -sf vmlinuz-${kernel_name} Image)
+    [[ "${PLATFORM}" == "amlogic" || "${PLATFORM}" == "allwinner" ]] && (cd ${tag_bootfs} && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} zImage)
+    [[ "${PLATFORM}" == "rockchip" ]] && (cd ${tag_bootfs} && ln -sf uInitrd-${kernel_name} uInitrd && ln -sf vmlinuz-${kernel_name} Image)
     [[ "$(ls ${tag_bootfs}/*${kernel_name} -l 2>/dev/null | grep "^-" | wc -l)" -ge "2" ]] || error_msg "The /boot files is missing."
     [[ "${PLATFORM}" == "amlogic" ]] && get_textoffset "${tag_bootfs}/zImage"
 
     # 02. For /boot/dtb/${PLATFORM}/*
     [[ -d "${tag_bootfs}/dtb/${PLATFORM}" ]] || mkdir -p ${tag_bootfs}/dtb/${PLATFORM}
     tar -xzf ${kernel_dtb} -C ${tag_bootfs}/dtb/${PLATFORM}
-    [[ "${PLATFORM}" == "rockchip" || "${PLATFORM}" == "allwinner" ]] && ln -sf dtb ${tag_bootfs}/dtb-${kernel_name}
+    [[ "${PLATFORM}" == "rockchip" ]] && ln -sf dtb ${tag_bootfs}/dtb-${kernel_name}
     [[ "$(ls ${tag_bootfs}/dtb/${PLATFORM} -l 2>/dev/null | grep "^-" | wc -l)" -ge "2" ]] || error_msg "/boot/dtb/${PLATFORM} files is missing."
 
     # 03. For /lib/modules/${kernel_name}
@@ -633,49 +617,60 @@ replace_kernel() {
     [[ "$(ls ${tag_rootfs}/lib/modules/${kernel_name} -l 2>/dev/null | grep "^d" | wc -l)" -eq "1" ]] || error_msg "/usr/lib/modules kernel folder is missing."
 }
 
-refactor_files() {
-    process_msg " (4/5) Refactor related files."
+refactor_bootfs() {
+    process_msg " (4/6) Refactor bootfs files."
     cd ${tag_bootfs}
 
-    # Process [ Amlogic ] series boot partition files
-    [[ "${PLATFORM}" == "amlogic" ]] && {
+    # Process Amlogic series boot partition files
+    [[ "${PLATFORM}" == "amlogic" && "${need_overload}" == "yes" ]] && {
         # Add u-boot.ext for Amlogic 5.10 kernel
-        if [[ "${need_overload}" == "yes" && -n "${UBOOT_OVERLOAD}" && -f "${UBOOT_OVERLOAD}" ]]; then
+        if [[ -n "${UBOOT_OVERLOAD}" && -f "${UBOOT_OVERLOAD}" ]]; then
             cp -f ${UBOOT_OVERLOAD} u-boot.ext
             chmod +x u-boot.ext
-        elif [[ "${need_overload}" == "yes" ]] && [[ -z "${UBOOT_OVERLOAD}" || ! -f "${UBOOT_OVERLOAD}" ]]; then
+        elif [[ -z "${UBOOT_OVERLOAD}" || ! -f "${UBOOT_OVERLOAD}" ]]; then
             error_msg "${board} Board does not support using ${kernel} kernel, missing u-boot."
         fi
+    }
 
-        # Edit the uEnv.txt
-        boot_conf_file="uEnv.txt"
-        [[ -f "${boot_conf_file}" ]] || error_msg "The [ ${boot_conf_file} ] file does not exist."
-        sed -i "s|LABEL=ROOTFS|${uenv_rootdev}|g" ${boot_conf_file}
-        sed -i "s|meson.*.dtb|${FDTFILE}|g" ${boot_conf_file}
+    # Set uEnv.txt & extlinux.conf mount parameters
+    uenv_rootdev="UUID=${ROOTFS_UUID} rootflags=compress=zstd:6 rootfstype=btrfs"
+    # Set armbianEnv.txt mount parameters
+    armbianenv_rootdev="UUID=${ROOTFS_UUID}"
+    armbianenv_rootflags="compress=zstd:6"
 
-        # Add an alternate file (/boot/extlinux/extlinux.conf)
-        boot_extlinux_file="extlinux/extlinux.conf.bak"
-        rename_extlinux_file="extlinux/extlinux.conf"
-        [[ -f "${boot_extlinux_file}" ]] && {
-            sed -i "s|LABEL=ROOTFS|${uenv_rootdev}|g" ${boot_extlinux_file}
-            sed -i "s|meson.*.dtb|${FDTFILE}|g" ${boot_extlinux_file}
-        }
+    # Edit the uEnv.txt
+    uenv_conf_file="uEnv.txt"
+    [[ -f "${uenv_conf_file}" ]] && {
+        sed -i "s|LABEL=ROOTFS|${uenv_rootdev}|g" ${uenv_conf_file}
+        sed -i "s|meson.*.dtb|${FDTFILE}|g" ${uenv_conf_file}
+    }
+
+    # Add an alternate file (/boot/extlinux/extlinux.conf)
+    boot_extlinux_file="extlinux/extlinux.conf.bak"
+    rename_extlinux_file="extlinux/extlinux.conf"
+    [[ -f "${boot_extlinux_file}" ]] && {
+        sed -i "s|LABEL=ROOTFS|${uenv_rootdev}|g" ${boot_extlinux_file}
+        sed -i "s|meson.*.dtb|${FDTFILE}|g" ${boot_extlinux_file}
         # If needed, such as t95z(s905x), rename delete .bak
         [[ "${BOOT_CONF}" == "extlinux.conf" ]] && mv -f ${boot_extlinux_file} ${rename_extlinux_file}
     }
 
-    # Process [ Rockchip / Allwinner ] series boot partition files
-    [[ "${PLATFORM}" == "rockchip" || "${PLATFORM}" == "allwinner" ]] && {
-        # Edit the armbianEnv.txt
-        boot_conf_file="armbianEnv.txt"
-        [[ -f "${boot_conf_file}" ]] || error_msg "The [ ${boot_conf_file} ] file does not exist."
-        sed -i "s|fdtfile.*|fdtfile=rockchip/${FDTFILE}|g" ${boot_conf_file}
-        sed -i "s|rootdev=.*|rootdev=${armbianenv_rootdev}|g" ${boot_conf_file}
-        sed -i "s|rootfstype=.*|rootfstype=btrfs|g" ${boot_conf_file}
-        sed -i "s|rootflags.*|rootflags=${armbianenv_rootflags}|g" ${boot_conf_file}
-        sed -i "s|overlay_prefix.*|overlay_prefix=${FAMILY}|g" ${boot_conf_file}
+    # Edit the armbianEnv.txt
+    armbianenv_conf_file="armbianEnv.txt"
+    [[ -f "${armbianenv_conf_file}" ]] && {
+        sed -i "s|fdtfile.*|fdtfile=rockchip/${FDTFILE}|g" ${armbianenv_conf_file}
+        sed -i "s|rootdev=.*|rootdev=${armbianenv_rootdev}|g" ${armbianenv_conf_file}
+        sed -i "s|rootfstype=.*|rootfstype=btrfs|g" ${armbianenv_conf_file}
+        sed -i "s|rootflags.*|rootflags=${armbianenv_rootflags}|g" ${armbianenv_conf_file}
+        sed -i "s|overlay_prefix.*|overlay_prefix=${FAMILY}|g" ${armbianenv_conf_file}
     }
 
+    # Check if the /boot/*Env.txt file exists
+    [[ -f "${uenv_conf_file}" || -f "${armbianenv_conf_file}" ]] || error_msg "Missing [ /boot/*Env.txt ]"
+}
+
+refactor_rootfs() {
+    process_msg " (5/6) Refactor rootfs files."
     cd ${tag_rootfs}
 
     # Add directory
@@ -684,35 +679,6 @@ refactor_files() {
     # Edit fstab
     sed -i "s|LABEL=ROOTFS|UUID=${ROOTFS_UUID}|" etc/fstab
     sed -i "s|option label 'ROOTFS'|option uuid '${ROOTFS_UUID}'|" etc/config/fstab
-
-    # Add firmware information
-    echo "PLATFORM='${PLATFORM}'" >>${op_release}
-    echo "SOC='${SOC}'" >>${op_release}
-    echo "FDTFILE='${FDTFILE}'" >>${op_release}
-    echo "FAMILY='${FAMILY}'" >>${op_release}
-    echo "BOARD='${board}'" >>${op_release}
-    echo "KERNEL_VERSION='${kernel}'" >>${op_release}
-    echo "KERNEL_BRANCH='${KERNEL_BRANCH}'" >>${op_release}
-    echo "BOOT_CONF='${BOOT_CONF}'" >>${op_release}
-    echo "PACKAGED_DATE='$(date +%Y-%m-%d)'" >>${op_release}
-    echo "MAINLINE_UBOOT='/lib/u-boot/${MAINLINE_UBOOT}'" >>${op_release}
-    echo "ANDROID_UBOOT='/lib/u-boot/${BOOTLOADER_IMG}'" >>${op_release}
-    if [[ "${PLATFORM}" == "amlogic" ]]; then
-        echo "UBOOT_OVERLOAD='${UBOOT_OVERLOAD}'" >>${op_release}
-    elif [[ "${PLATFORM}" == "rockchip" ]]; then
-        echo "TRUST_IMG='${TRUST_IMG}'" >>${op_release}
-    elif [[ "${PLATFORM}" == "allwinner" ]]; then
-        echo "SPL_LOAD_ADDRESS='${SPL_LOAD_ADDRESS}'" >>${op_release}
-    fi
-
-    # Add firmware version information to the terminal page
-    [[ -f "etc/banner" ]] && {
-        echo " Install OpenWrt: System → Amlogic Service → Install OpenWrt" >>etc/banner
-        echo " Update  OpenWrt: System → Amlogic Service → Online  Update" >>etc/banner
-        echo " Board: ${bd_name} | OpenWrt Kernel: ${kernel_name}" >>etc/banner
-        echo " Production Date: $(date +%Y-%m-%d)" >>etc/banner
-        echo "───────────────────────────────────────────────────────────────────────" >>etc/banner
-    }
 
     # Add cpustat
     cpustat_file="${patches_path}/cpustat"
@@ -839,6 +805,35 @@ EOF
         sed -e "s/macaddr=.*/macaddr=${random_macaddr}:07/" "brcmfmac4354-sdio.txt" >"brcmfmac4354-sdio.amlogic,sm1.txt"
     )
 
+    # Add firmware version information to the terminal page
+    [[ -f "etc/banner" ]] && {
+        echo " Install OpenWrt: System → Amlogic Service → Install OpenWrt" >>etc/banner
+        echo " Update  OpenWrt: System → Amlogic Service → Online  Update" >>etc/banner
+        echo " Board: ${board} | OpenWrt Kernel: ${kernel_name}" >>etc/banner
+        echo " Production Date: $(date +%Y-%m-%d)" >>etc/banner
+        echo "───────────────────────────────────────────────────────────────────────" >>etc/banner
+    }
+
+    # Add firmware information
+    echo "PLATFORM='${PLATFORM}'" >>${op_release}
+    echo "SOC='${SOC}'" >>${op_release}
+    echo "FDTFILE='${FDTFILE}'" >>${op_release}
+    echo "FAMILY='${FAMILY}'" >>${op_release}
+    echo "BOARD='${board}'" >>${op_release}
+    echo "KERNEL_VERSION='${kernel}'" >>${op_release}
+    echo "KERNEL_BRANCH='${KERNEL_BRANCH}'" >>${op_release}
+    echo "BOOT_CONF='${BOOT_CONF}'" >>${op_release}
+    echo "PACKAGED_DATE='$(date +%Y-%m-%d)'" >>${op_release}
+    echo "MAINLINE_UBOOT='/lib/u-boot/${MAINLINE_UBOOT}'" >>${op_release}
+    echo "ANDROID_UBOOT='/lib/u-boot/${BOOTLOADER_IMG}'" >>${op_release}
+    if [[ "${PLATFORM}" == "amlogic" ]]; then
+        echo "UBOOT_OVERLOAD='${UBOOT_OVERLOAD}'" >>${op_release}
+    elif [[ "${PLATFORM}" == "rockchip" ]]; then
+        echo "TRUST_IMG='${TRUST_IMG}'" >>${op_release}
+    elif [[ "${PLATFORM}" == "allwinner" ]]; then
+        echo "SPL_LOAD_ADDRESS='${SPL_LOAD_ADDRESS}'" >>${op_release}
+    fi
+
     cd ${current_path}
 
     # Create snapshot
@@ -849,7 +844,7 @@ EOF
 }
 
 clean_tmp() {
-    process_msg " (5/5) Cleanup tmp files."
+    process_msg " (6/6) Cleanup tmp files."
     cd ${current_path}
 
     # Unmount the OpenWrt image file
@@ -924,7 +919,8 @@ loop_make() {
                     make_image
                     extract_openwrt
                     replace_kernel
-                    refactor_files
+                    refactor_bootfs
+                    refactor_rootfs
                     clean_tmp
 
                     echo -e "(${j}.${i}) OpenWrt made successfully. \n"
