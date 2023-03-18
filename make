@@ -1,5 +1,5 @@
 #!/bin/bash
-#============================================================================
+#================================================================================================
 #
 # This file is licensed under the terms of the GNU General Public
 # License version 2. This program is licensed "as is" without any
@@ -9,13 +9,17 @@
 # https://github.com/ophub/amlogic-s9xxx-openwrt
 #
 # Description: Automatically Packaged OpenWrt for Amlogic and Rockchip
-# Copyright (C) 2020- https://github.com/unifreq
-# Copyright (C) 2020- https://github.com/ophub/amlogic-s9xxx-openwrt
+# Copyright (C) 2020~ https://github.com/openwrt/openwrt
+# Copyright (C) 2020~ https://github.com/coolsnowwolf/lede
+# Copyright (C) 2020~ https://github.com/immortalwrt/immortalwrt
+# Copyright (C) 2020~ https://github.com/unifreq/openwrt_packit
+# Copyright (C) 2021~ https://github.com/ophub/amlogic-s9xxx-armbian/blob/main/CONTRIBUTORS.md
+# Copyright (C) 2020~ https://github.com/ophub/amlogic-s9xxx-openwrt
 #
 # Command: sudo ./make
 # Command optional parameters please refer to the source code repository
 #
-#============================== Functions list ==============================
+#======================================== Functions list ========================================
 #
 # error_msg          : Output error message
 # process_msg        : Output process message
@@ -38,7 +42,7 @@
 #
 # loop_make          : Loop to make OpenWrt files
 #
-#====================== Set make environment variables ======================
+#================================ Set make environment variables ================================
 #
 # Related file storage path
 current_path="${PWD}"
@@ -83,14 +87,14 @@ kernel_repo="https://github.com/nabakdev/sibondt-kernel/tree/main/pub"
 # Set stable kernel directory: [ stable ], rk3588 kernel directory: [ rk3588 ]
 kernel_dir=("stable" "rk3588")
 # Set the list of kernels used by default
-stable_kernel=("6.1.10" "5.15.50")
+stable_kernel=("6.1.15" "5.15.100")
 rk3588_kernel=("5.10.150")
+h6_kernel=("6.1.15")
 # Set to automatically use the latest kernel
 auto_kernel="true"
 
-# Get the list of devices built by default
-# 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION  9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
-build_openwrt=($(cat ${model_conf} | sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' | grep -E "^[^#].*:yes$" | awk -F':' '{print $13}' | sort | uniq | xargs))
+# Initialize the build device
+make_board="all"
 
 # Set OpenWrt firmware size (Unit: MiB, boot_mb >= 256, root_mb >= 512)
 boot_mb="256"
@@ -107,7 +111,7 @@ WARNING="[\033[93m WARNING \033[0m]"
 SUCCESS="[\033[92m SUCCESS \033[0m]"
 ERROR="[\033[91m ERROR \033[0m]"
 #
-#============================================================================
+#================================================================================================
 
 error_msg() {
     echo -e "${ERROR} ${1}"
@@ -129,19 +133,13 @@ init_var() {
     echo -e "${STEPS} Start Initializing Variables..."
 
     # If it is followed by [ : ], it means that the option requires a parameter value
-    get_all_ver="$(getopt "b:k:a:v:r:s:g:" "${@}")"
+    get_all_ver="$(getopt "b:k:a:r:s:g:" "${@}")"
 
     while [[ -n "${1}" ]]; do
         case "${1}" in
         -b | --Board)
             if [[ -n "${2}" ]]; then
-                if [[ "${2}" != "all" ]]; then
-                    unset build_openwrt
-                    oldIFS=$IFS
-                    IFS=_
-                    build_openwrt=(${2})
-                    IFS=$oldIFS
-                fi
+                make_board="${2}"
                 shift
             else
                 error_msg "Invalid -b parameter [ ${2} ]!"
@@ -164,18 +162,6 @@ init_var() {
                 shift
             else
                 error_msg "Invalid -a parameter [ ${2} ]!"
-            fi
-            ;;
-        -v | --Versionbranch)
-            if [[ -n "${2}" ]]; then
-                oldIFS=${IFS}
-                IFS=_
-                kernel_dir=(${2})
-                IFS=${oldIFS}
-                [[ -n "$(echo "${kernel_dir[@]}" | grep -oE "rk3588")" ]] || kernel_dir[$(((${#kernel_dir[@]} + 1)))]="rk3588"
-                shift
-            else
-                error_msg "Invalid -v parameter [ ${2} ]!"
             fi
             ;;
         -r | --kernelRepository)
@@ -208,6 +194,32 @@ init_var() {
         esac
         shift
     done
+
+    # Get the list of devices built by default
+    # 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION
+    # 9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
+    if [[ "${make_board}" == "all" ]]; then
+        board_list=""
+        make_openwrt=($(
+            cat ${model_conf} |
+                sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
+                grep -E "^[^#].*:yes$" | awk -F':' '{print $13}' |
+                sort | uniq | xargs
+        ))
+    else
+        board_list=":($(echo ${make_board} | sed -e 's/_/\|/g'))"
+        make_openwrt=($(echo ${make_board} | sed -e 's/_/ /g'))
+    fi
+    [[ "${#make_openwrt[*]}" -eq "0" ]] && error_msg "The board is missing, stop making."
+
+    # Set kernel download directory
+    kernel_dir=($(
+        cat ${model_conf} |
+            sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
+            grep -E "^[^#].*${board_list}:yes$" | awk -F':' '{if ($9 ~ /^[a-zA-Z]/) print $9}' |
+            sort | uniq | xargs
+    ))
+    [[ "${#kernel_dir[*]}" -eq "0" ]] && kernel_dir=("stable")
 
     # Convert kernel library address to svn format
     kernel_repo="${kernel_repo//tree\/main/trunk}"
@@ -298,6 +310,8 @@ query_version() {
             # Select the corresponding kernel directory and list
             if [[ "${k}" == "rk3588" ]]; then
                 down_kernel_list=(${rk3588_kernel[*]})
+            elif [[ "${k}" == "h6" ]]; then
+                down_kernel_list=(${h6_kernel[*]})
             else
                 down_kernel_list=(${stable_kernel[*]})
             fi
@@ -308,15 +322,26 @@ query_version() {
             for kernel_var in ${down_kernel_list[*]}; do
                 echo -e "${INFO} (${x}.${i}) Auto query the latest kernel version of the same series for [ ${k} - ${kernel_var} ]"
 
-                # Identify the kernel <VERSION> and <PATCHLEVEL>, such as [ 5.10 ]
+                # Identify the kernel <VERSION> and <PATCHLEVEL>, such as [ 5.15 ]
                 kernel_verpatch="$(echo ${kernel_var} | awk -F '.' '{print $1"."$2}')"
 
-                # Check the kernel <SUBLEVEL>, such as [ 125 ]
+                # Check the kernel <SUBLEVEL>, such as [ 100 ]
                 if [[ -n "${gh_token}" ]]; then
-                    kernel_sub="$(curl --header "authorization: Bearer ${gh_token}" -s "${server_kernel_url}/${k}" | grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" | sed -e "s/${kernel_verpatch}.//g" | sort -n | sed -n '$p')"
+                    kernel_sub="$(
+                        curl -s "${server_kernel_url}/${k}" \
+                            --header "authorization: Bearer ${gh_token}" |
+                            grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" |
+                            sed -e "s/${kernel_verpatch}.//g" |
+                            sort -n | sed -n '$p'
+                    )"
                     query_api="Authenticated user request"
                 else
-                    kernel_sub="$(curl -s "${server_kernel_url}/${k}" | grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" | sed -e "s/${kernel_verpatch}.//g" | sort -n | sed -n '$p')"
+                    kernel_sub="$(
+                        curl -s "${server_kernel_url}/${k}" |
+                            grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" |
+                            sed -e "s/${kernel_verpatch}.//g" |
+                            sort -n | sed -n '$p'
+                    )"
                     query_api="Unauthenticated user request"
                 fi
 
@@ -335,6 +360,9 @@ query_version() {
             if [[ "${k}" == "rk3588" ]]; then
                 unset rk3588_kernel
                 rk3588_kernel=(${tmp_arr_kernels[*]})
+            elif [[ "${k}" == "h6" ]]; then
+                unset h6_kernel
+                h6_kernel=(${tmp_arr_kernels[*]})
             else
                 unset stable_kernel
                 stable_kernel=(${tmp_arr_kernels[*]})
@@ -343,9 +371,6 @@ query_version() {
             let x++
         }
     done
-
-    echo -e "${INFO} The latest version of the stable_kernel: [ ${stable_kernel[*]} ]"
-    echo -e "${INFO} The latest version of the rk3588_kernel: [ ${rk3588_kernel[*]} ]\n"
 }
 
 check_kernel() {
@@ -376,6 +401,8 @@ download_kernel() {
             # Set the kernel download list
             if [[ "${k}" == "rk3588" ]]; then
                 down_kernel_list=(${rk3588_kernel[*]})
+            elif [[ "${k}" == "h6" ]]; then
+                down_kernel_list=(${h6_kernel[*]})
             else
                 down_kernel_list=(${stable_kernel[*]})
             fi
@@ -407,23 +434,20 @@ confirm_version() {
 
     # Find [ the first ] configuration information with [ the same BOARD name ] and [ BUILD as yes ] in the ${model_conf} file.
     [[ -f "${model_conf}" ]] || error_msg "[ ${model_conf} ] file is missing!"
-    board_conf="$(cat ${model_conf} | sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' | grep -E "^[^#].*:${board}:yes$" | head -n 1)"
+    board_conf="$(
+        cat ${model_conf} |
+            sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
+            grep -E "^[^#].*:${board}:yes$" |
+            head -n 1
+    )"
     [[ -n "${board_conf}" ]] || error_msg "[ ${board} ] config is missing!"
 
-    # 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION  9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
-<<<<<<< HEAD
-    # Column 5, called <UBOOT_OVERLOAD> in Amlogic, <TRUST_IMG> in Rockchip, and <SPL_LOAD_ADDRESS> in Allwinner
-=======
-    # Column 5, called <UBOOT_OVERLOAD> in Amlogic, <TRUST_IMG> in Rockchip, Not used in Allwinner.
->>>>>>> upstream/main
+    # 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION
+    # 9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
     SOC="$(echo ${board_conf} | awk -F':' '{print $3}')"
     FDTFILE="$(echo ${board_conf} | awk -F':' '{print $4}')"
     UBOOT_OVERLOAD="$(echo ${board_conf} | awk -F':' '{print $5}')"
     TRUST_IMG="${UBOOT_OVERLOAD}"
-<<<<<<< HEAD
-    SPL_LOAD_ADDRESS="${UBOOT_OVERLOAD}"
-=======
->>>>>>> upstream/main
     MAINLINE_UBOOT="$(echo ${board_conf} | awk -F':' '{print $6}')" && MAINLINE_UBOOT="${MAINLINE_UBOOT##*/}"
     BOOTLOADER_IMG="$(echo ${board_conf} | awk -F':' '{print $7}')" && BOOTLOADER_IMG="${BOOTLOADER_IMG##*/}"
     KERNEL_BRANCH="$(echo ${board_conf} | awk -F':' '{print $9}')"
@@ -691,8 +715,17 @@ refactor_rootfs() {
     mkdir -p .reserved boot run
 
     # Edit fstab
-    sed -i "s|LABEL=ROOTFS|UUID=${ROOTFS_UUID}|" etc/fstab
-    sed -i "s|option label 'ROOTFS'|option uuid '${ROOTFS_UUID}'|" etc/config/fstab
+    sed -i "s|LABEL=ROOTFS|UUID=${ROOTFS_UUID}|g" etc/fstab
+    sed -i "s|option label 'ROOTFS'|option uuid '${ROOTFS_UUID}'|g" etc/config/fstab
+
+    # Edit Kernel download directory
+    [[ -f "etc/config/amlogic" ]] && {
+        if [[ "${KERNEL_BRANCH}" == "rk3588" ]]; then
+            sed -i "s|pub\/stable|pub\/rk3588|g" etc/config/amlogic
+        elif [[ "${KERNEL_BRANCH}" == "h6" ]]; then
+            sed -i "s|pub\/stable|pub\/h6|g" etc/config/amlogic
+        fi
+    }
 
     # Modify the default script to [ bash ] for [ cpustat ]
     [[ -x "bin/bash" ]] && {
@@ -846,6 +879,11 @@ EOF
     elif [[ "${PLATFORM}" == "rockchip" ]]; then
         echo "TRUST_IMG='${TRUST_IMG}'" >>${op_release}
     fi
+    if [[ "${PLATFORM}" == "rockchip" ]]; then
+        echo "SHOW_INSTALL_MENU='no'" >>${op_release}
+    else
+        echo "SHOW_INSTALL_MENU='yes'" >>${op_release}
+    fi
 
     cd ${current_path}
 
@@ -888,7 +926,7 @@ loop_make() {
     echo -e "${STEPS} Start making OpenWrt firmware..."
 
     j="1"
-    for b in ${build_openwrt[*]}; do
+    for b in ${make_openwrt[*]}; do
         {
 
             # Set specific configuration for building OpenWrt system
@@ -899,9 +937,12 @@ loop_make() {
             if [[ "${KERNEL_BRANCH}" == "rk3588" ]]; then
                 kernel_list=(${rk3588_kernel[*]})
                 kd="rk3588"
+            elif [[ "${KERNEL_BRANCH}" == "h6" ]]; then
+                kernel_list=(${h6_kernel[*]})
+                kd="h6"
             else
                 kernel_list=(${stable_kernel[*]})
-                kd="$(echo "${kernel_dir[@]}" | sed -e "s|rk3588||" | xargs)"
+                kd="stable"
             fi
 
             i="1"
@@ -910,8 +951,7 @@ loop_make() {
                     kernel="${k}"
 
                     # Skip inapplicable kernels
-                    if { [[ "${KERNEL_BRANCH}" == "rk3588" ]] && [[ "${kernel:0:5}" != "5.10." ]]; } ||
-                        { [[ "${KERNEL_BRANCH}" == "6.x.y" ]] && [[ "${kernel:0:2}" != "6." ]]; } ||
+                    if { [[ "${KERNEL_BRANCH}" == "6.x.y" ]] && [[ "${kernel:0:2}" != "6." ]]; } ||
                         { [[ "${KERNEL_BRANCH}" == "5.10.y" ]] && [[ "${kernel:0:5}" != "5.10." ]]; } ||
                         { [[ "${KERNEL_BRANCH}" == "5.15.y" ]] && [[ "${kernel:0:5}" != "5.15." && "${kernel:0:4}" != "5.4." ]]; }; then
                         echo -e "(${j}.${i}) ${TIPS} The [ ${board} ] device cannot use [ ${kd}/${kernel} ] kernel, skip."
@@ -973,10 +1013,7 @@ download_depends
 download_kernel
 
 # Show make settings
-echo -e "${INFO} [ ${#build_openwrt[*]} ] lists of OpenWrt board: [ $(echo ${build_openwrt[*]} | xargs) ]"
-echo -e "${INFO} [ ${#stable_kernel[*]} ] lists of stable kernel: [ $(echo ${stable_kernel[*]} | xargs) ]"
-echo -e "${INFO} [ ${#rk3588_kernel[*]} ] lists of rk3588 Kernel: [ $(echo ${rk3588_kernel[*]} | xargs) ]"
-echo -e "${INFO} Use the latest kernel version: [ ${auto_kernel} ] \n"
+echo -e "${INFO} [ ${#make_openwrt[*]} ] lists of OpenWrt board: [ $(echo ${make_openwrt[*]} | xargs) ]"
 # Show server start information
 echo -e "${INFO} Server CPU configuration information: \n$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) \n"
 echo -e "${INFO} Server memory usage: \n$(free -h) \n"
