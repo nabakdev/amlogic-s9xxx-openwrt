@@ -87,9 +87,9 @@ kernel_repo="https://github.com/nabakdev/sibondt-kernel/tree/main/pub"
 # Set stable kernel directory: [ stable ], rk3588 kernel directory: [ rk3588 ]
 kernel_dir=("stable" "rk3588")
 # Set the list of kernels used by default
-stable_kernel=("6.1.15" "5.15.100")
-rk3588_kernel=("5.10.150")
-h6_kernel=("6.1.15")
+stable_kernel=("6.1.1" "5.15.1")
+rk3588_kernel=("5.10.1")
+h6_kernel=("6.1.1")
 # Set to automatically use the latest kernel
 auto_kernel="true"
 
@@ -212,14 +212,24 @@ init_var() {
     fi
     [[ "${#make_openwrt[*]}" -eq "0" ]] && error_msg "The board is missing, stop making."
 
-    # Set kernel download directory
-    kernel_dir=($(
+    # In KERNEL_BRANCH, query the [ kernel directory ] and [ specific kernel ]
+    kernel_from=($(
         cat ${model_conf} |
-            sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
-            grep -E "^[^#].*${board_list}:yes$" | awk -F':' '{if ($9 ~ /^[a-zA-Z]/) print $9}' |
+            sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' -e 's/\.y/\.1/g' |
+            grep -E "^[^#].*${board_list}:yes$" | awk -F':' '{print $9}' |
             sort | uniq | xargs
     ))
-    [[ "${#kernel_dir[*]}" -eq "0" ]] && kernel_dir=("stable")
+    [[ "${#kernel_from[*]}" -eq "0" ]] && error_msg "Missing [ KERNEL_BRANCH ] settings, stop building."
+
+    # In KERNEL_BRANCH, query the [ specified kernel ], Start with the [ number ], such as 5.15.y, 6.1.y, etc.
+    specify_kernel=($(echo ${kernel_from[*]} | sed -e 's/[ ][ ]*/\n/g' | grep -E "^[0-9]+" | sort | uniq | xargs))
+
+    # In KERNEL_BRANCH, the [ kernel directory ], Start with the [ letter ], such as stable, rk3588, h6, etc.
+    kernel_dir=($(echo ${kernel_from[*]} | sed -e 's/[ ][ ]*/\n/g' | grep -E "^[a-z]" | sort | uniq | xargs))
+    # Add the specified kernel directory
+    [[ "${#specify_kernel[*]}" -ne "0" ]] && kernel_dir=(${kernel_dir[*]} "specify")
+    # Check the kernel directory
+    [[ "${#kernel_dir[*]}" -eq "0" ]] && error_msg "The [ kernel_dir ] is missing, stop building."
 
     # Convert kernel library address to svn format
     kernel_repo="${kernel_repo//tree\/main/trunk}"
@@ -296,7 +306,7 @@ download_depends() {
 }
 
 query_version() {
-    echo -e "${STEPS} Start querying the latest kernel version..."
+    echo -e "${STEPS} Start querying the latest kernel version for [ $(echo ${kernel_dir[*]} | xargs) ]..."
 
     # Convert kernel library address to API format
     server_kernel_url="${kernel_repo#*com\/}"
@@ -308,10 +318,14 @@ query_version() {
     for k in ${kernel_dir[*]}; do
         {
             # Select the corresponding kernel directory and list
+            kd="${k}"
             if [[ "${k}" == "rk3588" ]]; then
                 down_kernel_list=(${rk3588_kernel[*]})
             elif [[ "${k}" == "h6" ]]; then
                 down_kernel_list=(${h6_kernel[*]})
+            elif [[ "${k}" == "specify" ]]; then
+                kd="stable"
+                down_kernel_list=(${specify_kernel[*]})
             else
                 down_kernel_list=(${stable_kernel[*]})
             fi
@@ -328,7 +342,7 @@ query_version() {
                 # Check the kernel <SUBLEVEL>, such as [ 100 ]
                 if [[ -n "${gh_token}" ]]; then
                     kernel_sub="$(
-                        curl -s "${server_kernel_url}/${k}" \
+                        curl -s "${server_kernel_url}/${kd}" \
                             --header "authorization: Bearer ${gh_token}" |
                             grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" |
                             sed -e "s/${kernel_verpatch}.//g" |
@@ -337,7 +351,7 @@ query_version() {
                     query_api="Authenticated user request"
                 else
                     kernel_sub="$(
-                        curl -s "${server_kernel_url}/${k}" |
+                        curl -s "${server_kernel_url}/${kd}" |
                             grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" |
                             sed -e "s/${kernel_verpatch}.//g" |
                             sort -n | sed -n '$p'
@@ -363,6 +377,9 @@ query_version() {
             elif [[ "${k}" == "h6" ]]; then
                 unset h6_kernel
                 h6_kernel=(${tmp_arr_kernels[*]})
+            elif [[ "${k}" == "specify" ]]; then
+                unset specify_kernel
+                specify_kernel=(${tmp_arr_kernels[*]})
             else
                 unset stable_kernel
                 stable_kernel=(${tmp_arr_kernels[*]})
@@ -376,7 +393,6 @@ query_version() {
 check_kernel() {
     [[ -n "${1}" ]] && check_path="${1}" || error_msg "Invalid kernel path to check."
     check_files=($(cat "${check_path}/sha256sums" | awk '{print $2}'))
-    m="1"
     for cf in ${check_files[*]}; do
         {
             # Check if file exists
@@ -385,7 +401,6 @@ check_kernel() {
             tmp_sha256sum="$(sha256sum "${check_path}/${cf}" | awk '{print $1}')"
             tmp_checkcode="$(cat ${check_path}/sha256sums | grep ${cf} | awk '{print $1}')"
             [[ "${tmp_sha256sum}" == "${tmp_checkcode}" ]] || error_msg "[ ${cf} ]: sha256sum verification failed."
-            let m++
         }
     done
     echo -e "${INFO} All [ ${#check_files[*]} ] kernel files are sha256sum checked to be complete.\n"
@@ -393,16 +408,20 @@ check_kernel() {
 
 download_kernel() {
     cd ${current_path}
-    echo -e "${STEPS} Start downloading the kernel files..."
+    echo -e "${STEPS} Start downloading the kernel files for [ $(echo ${kernel_dir[*]} | xargs) ]..."
 
     x="1"
     for k in ${kernel_dir[*]}; do
         {
             # Set the kernel download list
+            kd="${k}"
             if [[ "${k}" == "rk3588" ]]; then
                 down_kernel_list=(${rk3588_kernel[*]})
             elif [[ "${k}" == "h6" ]]; then
                 down_kernel_list=(${h6_kernel[*]})
+            elif [[ "${k}" == "specify" ]]; then
+                down_kernel_list=(${specify_kernel[*]})
+                kd="stable"
             else
                 down_kernel_list=(${stable_kernel[*]})
             fi
@@ -410,15 +429,15 @@ download_kernel() {
             # Download the kernel to the storage directory
             i="1"
             for kernel_var in ${down_kernel_list[*]}; do
-                if [[ ! -d "${kernel_path}/${k}/${kernel_var}" ]]; then
-                    echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel loading from [ ${kernel_repo/trunk/tree\/main}/${k}/${kernel_var} ]"
-                    svn export ${kernel_repo}/${k}/${kernel_var} ${kernel_path}/${k}/${kernel_var} --force
+                if [[ ! -d "${kernel_path}/${kd}/${kernel_var}" ]]; then
+                    echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel loading from [ ${kernel_repo/trunk/tree\/main}/${kd}/${kernel_var} ]"
+                    svn export ${kernel_repo}/${kd}/${kernel_var} ${kernel_path}/${kd}/${kernel_var} --force
                 else
                     echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel is in the local directory."
                 fi
 
                 # If the kernel contains the sha256sums file, check the files integrity
-                [[ -f "${kernel_path}/${k}/${kernel_var}/sha256sums" ]] && check_kernel "${kernel_path}/${k}/${kernel_var}"
+                [[ -f "${kernel_path}/${kd}/${kernel_var}/sha256sums" ]] && check_kernel "${kernel_path}/${kd}/${kernel_var}"
 
                 let i++
             done
@@ -715,6 +734,7 @@ refactor_rootfs() {
     mkdir -p .reserved boot run
 
     # Edit fstab
+    [[ -f "etc/fstab" && -f "etc/config/fstab" ]] || error_msg "The [ fstab ] files does not exist."
     sed -i "s|LABEL=ROOTFS|UUID=${ROOTFS_UUID}|g" etc/fstab
     sed -i "s|option label 'ROOTFS'|option uuid '${ROOTFS_UUID}'|g" etc/config/fstab
 
@@ -798,14 +818,18 @@ alias wifi brcmfmac
 EOF
 
     # Adjust startup settings
-    if ! grep -q 'ulimit -n' etc/init.d/boot; then
-        sed -i '/kmodloader/i \\tulimit -n 51200\n' etc/init.d/boot
-    fi
-    if ! grep -q '/tmp/update' etc/init.d/boot; then
-        sed -i '/mkdir -p \/tmp\/.uci/a \\tmkdir -p \/tmp\/update' etc/init.d/boot
-    fi
-    sed -i 's/ttyAMA0/ttyAML0/' etc/inittab
-    sed -i 's/ttyS0/tty0/' etc/inittab
+    [[ -f "etc/init.d/boot" ]] && {
+        if ! grep -q 'ulimit -n' etc/init.d/boot; then
+            sed -i '/kmodloader/i \\tulimit -n 51200\n' etc/init.d/boot
+        fi
+        if ! grep -q '/tmp/update' etc/init.d/boot; then
+            sed -i '/mkdir -p \/tmp\/.uci/a \\tmkdir -p \/tmp\/update' etc/init.d/boot
+        fi
+    }
+    [[ -f "etc/inittab" ]] && {
+        sed -i 's/ttyAMA0/ttyAML0/' etc/inittab
+        sed -i 's/ttyS0/tty0/' etc/inittab
+    }
 
     # Automatic expansion of the third and fourth partitions
     echo "yes" >root/.todo_rootfs_resize
@@ -934,15 +958,16 @@ loop_make() {
             confirm_version
 
             # Determine kernel branch
+            kd="${KERNEL_BRANCH}"
             if [[ "${KERNEL_BRANCH}" == "rk3588" ]]; then
                 kernel_list=(${rk3588_kernel[*]})
-                kd="rk3588"
             elif [[ "${KERNEL_BRANCH}" == "h6" ]]; then
                 kernel_list=(${h6_kernel[*]})
-                kd="h6"
+            elif [[ "${KERNEL_BRANCH}" =~ ^[0-9]{1,2}\.[0-9]+ ]]; then
+                kernel_list=(${specify_kernel[*]})
+                kd="stable"
             else
                 kernel_list=(${stable_kernel[*]})
-                kd="stable"
             fi
 
             i="1"
@@ -951,12 +976,12 @@ loop_make() {
                     kernel="${k}"
 
                     # Skip inapplicable kernels
-                    if { [[ "${KERNEL_BRANCH}" == "6.x.y" ]] && [[ "${kernel:0:2}" != "6." ]]; } ||
-                        { [[ "${KERNEL_BRANCH}" == "5.10.y" ]] && [[ "${kernel:0:5}" != "5.10." ]]; } ||
-                        { [[ "${KERNEL_BRANCH}" == "5.15.y" ]] && [[ "${kernel:0:5}" != "5.15." && "${kernel:0:4}" != "5.4." ]]; }; then
-                        echo -e "(${j}.${i}) ${TIPS} The [ ${board} ] device cannot use [ ${kd}/${kernel} ] kernel, skip."
-                        let i++
-                        continue
+                    if [[ "${KERNEL_BRANCH}" =~ ^[0-9]{1,2}\.[0-9]+ ]]; then
+                        [[ "${kernel}" != "$(echo ${KERNEL_BRANCH} | awk -F'.' '{print $1"."$2"."}')"* ]] && {
+                            echo -e "(${j}.${i}) ${TIPS} The [ ${board} ] device cannot use [ ${kd}/${kernel} ] kernel, skip."
+                            let i++
+                            continue
+                        }
                     fi
 
                     # Check disk space size
@@ -1015,8 +1040,6 @@ download_kernel
 # Show make settings
 echo -e "${INFO} [ ${#make_openwrt[*]} ] lists of OpenWrt board: [ $(echo ${make_openwrt[*]} | xargs) ]"
 # Show server start information
-echo -e "${INFO} Server CPU configuration information: \n$(cat /proc/cpuinfo | grep name | cut -f2 -d: | uniq -c) \n"
-echo -e "${INFO} Server memory usage: \n$(free -h) \n"
 echo -e "${INFO} Server space usage before starting to compile: \n$(df -hT ${current_path}) \n"
 
 # Loop to make OpenWrt firmware
