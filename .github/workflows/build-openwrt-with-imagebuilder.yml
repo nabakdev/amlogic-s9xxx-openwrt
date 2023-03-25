@@ -1,8 +1,9 @@
 #=====================================================================================
 # https://github.com/ophub/amlogic-s9xxx-openwrt
-# Description: Build OpenWrt with Image Builder
-# Instructions: https://openwrt.org/docs/guide-user/additional-software/imagebuilder
-# Download options: https://downloads.openwrt.org/releases
+# Description:   Build OpenWrt with Image Builder
+# Instructions:  https://openwrt.org/docs/guide-user/additional-software/imagebuilder
+# Download from: https://downloads.openwrt.org/releases
+#                https://downloads.immortalwrt.org/releases
 #=====================================================================================
 
 name: Build OpenWrt with ImageBuilder
@@ -14,13 +15,15 @@ on:
       releases_branch:
         description: "Select the releases branch"
         required: false
-        default: "22.03.3"
+        default: "openwrt:22.03.3"
         type: choice
         options:
-          - 22.03.3
-          - 21.02.5
-          - 19.07.10
-          - 18.06.9
+          - openwrt:22.03.3
+          - openwrt:21.02.5
+          - openwrt:19.07.10
+          - openwrt:18.06.9
+          - immortalwrt:21.02.4
+          - immortalwrt:21.02.3
       openwrt_board:
         description: "Select device board"
         required: false
@@ -89,7 +92,7 @@ on:
       kernel_repo:
         description: "Set the kernel repository"
         required: false
-        default: "https://github.com/nabakdev/sibondt-kernel/tree/main/pub"
+        default: "https://github.com/ophub/kernel/tree/main/pub"
       openwrt_size:
         description: "Set the rootfs size(Unit: MiB)"
         required: false
@@ -97,7 +100,7 @@ on:
 
 env:
   TZ: America/New_York
-  IMAGEBUILDER_SH: config-openwrt/openwrt-imagebuilder/imagebuilder.sh
+  IMAGEBUILDER_SH: config-openwrt/imagebuilder/imagebuilder.sh
 
 jobs:
   build:
@@ -133,7 +136,7 @@ jobs:
           RELEASES_BRANCH="${{ inputs.releases_branch }}"
           chmod +x ${IMAGEBUILDER_SH}
           ${IMAGEBUILDER_SH} ${RELEASES_BRANCH}
-          echo "RELEASES_BRANCH=${RELEASES_BRANCH}" >> ${GITHUB_ENV}
+          echo "RELEASES_TAG=${RELEASES_BRANCH/:/_}" >> ${GITHUB_ENV}
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Clean up server space
@@ -159,7 +162,7 @@ jobs:
         uses: ncipollo/release-action@main
         if: ${{ env.PACKAGED_STATUS }} == 'success' && !cancelled()
         with:
-          tag: OpenWrt_imagebuilder_${{ env.RELEASES_BRANCH }}_${{ env.PACKAGED_OUTPUTDATE }}
+          tag: OpenWrt_imagebuilder_${{ env.RELEASES_TAG }}_${{ env.PACKAGED_OUTPUTDATE }}
           artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
           allowUpdates: true
           token: ${{ secrets.GH_TOKEN }}

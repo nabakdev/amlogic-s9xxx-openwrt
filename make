@@ -231,8 +231,9 @@ init_var() {
     # Check the kernel directory
     [[ "${#kernel_dir[*]}" -eq "0" ]] && error_msg "The [ kernel_dir ] is missing, stop building."
 
-    # Convert kernel library address to svn format
-    kernel_repo="${kernel_repo//tree\/main/trunk}"
+    # Convert kernel library address to api format
+    [[ "${kernel_repo}" =~ ^https: ]] && kernel_repo="$(echo ${kernel_repo} | awk -F'/' '{print $4"/"$5}')"
+    kernel_api="https://api.github.com/repos/${kernel_repo}"
 }
 
 find_openwrt() {
@@ -308,11 +309,6 @@ download_depends() {
 query_version() {
     echo -e "${STEPS} Start querying the latest kernel version for [ $(echo ${kernel_dir[*]} | xargs) ]..."
 
-    # Convert kernel library address to API format
-    server_kernel_url="${kernel_repo#*com\/}"
-    server_kernel_url="${server_kernel_url//trunk/contents}"
-    server_kernel_url="https://api.github.com/repos/${server_kernel_url}"
-
     # Check the version on the kernel library
     x="1"
     for k in ${kernel_dir[*]}; do
@@ -336,31 +332,34 @@ query_version() {
             for kernel_var in ${down_kernel_list[*]}; do
                 echo -e "${INFO} (${x}.${i}) Auto query the latest kernel version of the same series for [ ${k} - ${kernel_var} ]"
 
-                # Identify the kernel <VERSION> and <PATCHLEVEL>, such as [ 5.15 ]
+                # Identify the kernel <VERSION> and <PATCHLEVEL>, such as [ 6.1 ]
                 kernel_verpatch="$(echo ${kernel_var} | awk -F '.' '{print $1"."$2}')"
 
-                # Check the kernel <SUBLEVEL>, such as [ 100 ]
                 if [[ -n "${gh_token}" ]]; then
-                    kernel_sub="$(
-                        curl -s "${server_kernel_url}/${kd}" \
-                            --header "authorization: Bearer ${gh_token}" |
-                            grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" |
-                            sed -e "s/${kernel_verpatch}.//g" |
-                            sort -n | sed -n '$p'
+                    latest_version="$(
+                        curl -s \
+                            -H "Accept: application/vnd.github+json" \
+                            -H "Authorization: Bearer ${gh_token}" \
+                            ${kernel_api}/releases/tags/kernel_${kd} |
+                            jq -r '.assets[].name' |
+                            grep -oE "${kernel_verpatch}\.[0-9]+" |
+                            sort -rV | head -n 1
                     )"
                     query_api="Authenticated user request"
                 else
-                    kernel_sub="$(
-                        curl -s "${server_kernel_url}/${kd}" |
-                            grep "name" | grep -oE "${kernel_verpatch}.[0-9]+" |
-                            sed -e "s/${kernel_verpatch}.//g" |
-                            sort -n | sed -n '$p'
+                    latest_version="$(
+                        curl -s \
+                            -H "Accept: application/vnd.github+json" \
+                            ${kernel_api}/releases/tags/kernel_${kd} |
+                            jq -r '.assets[].name' |
+                            grep -oE "${kernel_verpatch}\.[0-9]+" |
+                            sort -rV | head -n 1
                     )"
                     query_api="Unauthenticated user request"
                 fi
 
-                if [[ "${?}" -eq "0" && -n "${kernel_sub}" ]]; then
-                    tmp_arr_kernels[${i}]="${kernel_verpatch}.${kernel_sub}"
+                if [[ "${?}" -eq "0" && -n "${latest_version}" ]]; then
+                    tmp_arr_kernels[${i}]="${latest_version}"
                 else
                     tmp_arr_kernels[${i}]="${kernel_var}"
                 fi
@@ -430,8 +429,15 @@ download_kernel() {
             i="1"
             for kernel_var in ${down_kernel_list[*]}; do
                 if [[ ! -d "${kernel_path}/${kd}/${kernel_var}" ]]; then
-                    echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel loading from [ ${kernel_repo/trunk/tree\/main}/${kd}/${kernel_var} ]"
-                    svn export ${kernel_repo}/${kd}/${kernel_var} ${kernel_path}/${kd}/${kernel_var} --force
+                    kernel_down_from="https://github.com/${kernel_repo}/releases/download/kernel_${kd}/${kernel_var}.tar.gz"
+                    echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel download from [ ${kernel_down_from} ]"
+
+                    mkdir -p ${kernel_path}/${kd}
+                    wget "${kernel_down_from}" -q -P "${kernel_path}/${kd}"
+                    [[ "${?}" -ne "0" ]] && error_msg "Failed to download the kernel files from the server."
+
+                    tar -xf "${kernel_path}/${kd}/${kernel_var}.tar.gz" -C "${kernel_path}/${kd}"
+                    [[ "${?}" -ne "0" ]] && error_msg "[ ${kernel_var} ] kernel decompression failed."
                 else
                     echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel is in the local directory."
                 fi
@@ -441,6 +447,9 @@ download_kernel() {
 
                 let i++
             done
+
+            # Delete downloaded kernel temporary files
+            rm -f ${kernel_path}/${kd}/*.tar.gz
             sync
 
             let x++
@@ -463,6 +472,7 @@ confirm_version() {
 
     # 1.ID  2.MODEL  3.SOC  4.FDTFILE  5.UBOOT_OVERLOAD  6.MAINLINE_UBOOT  7.BOOTLOADER_IMG  8.DESCRIPTION
     # 9.KERNEL_BRANCH  10.PLATFORM  11.FAMILY  12.BOOT_CONF  13.BOARD  14.BUILD
+    # Column 5, called <UBOOT_OVERLOAD> in Amlogic, <TRUST_IMG> in Rockchip, Not used in Allwinner.
     SOC="$(echo ${board_conf} | awk -F':' '{print $3}')"
     FDTFILE="$(echo ${board_conf} | awk -F':' '{print $4}')"
     UBOOT_OVERLOAD="$(echo ${board_conf} | awk -F':' '{print $5}')"
