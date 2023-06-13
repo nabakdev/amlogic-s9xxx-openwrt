@@ -9,7 +9,7 @@
 # ------------------------------- Main source started -------------------------------
 #
 # Modify default theme（FROM uci-theme-bootstrap CHANGE TO luci-theme-material）
-sed -i 's/luci-theme-bootstrap/luci-theme-material/g' feeds/luci/collections/luci/Makefile
+sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile
 
 # Add the default password for the 'root' user（Change the empty password to 'password'）
 # sed -i 's/root::0:0:99999:7:::/root:$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.:0:0:99999:7:::/g' package/base-files/files/etc/shadow
@@ -28,6 +28,13 @@ echo "DISTRIB_SOURCECODE='official'" >>package/base-files/files/etc/openwrt_rele
 #
 # Add luci-app-amlogic
 svn co https://github.com/ophub/luci-app-amlogic/trunk/luci-app-amlogic package/luci-app-amlogic
+rm -rf package/lean/luci-theme-argon
+git clone --depth 1 https://github.com/jerrykuku/luci-theme-argon.git package/lean/luci-theme-argon
+
+# Adjust `luci-app-amlogic` default configuration
+sed -i "s|https.*/OpenWrt|https://github.com/nabakdev/amlogic-s9xxx-openwrt|g" package/luci-app-amlogic/root/etc/config/amlogic
+sed -i "s|opt/kernel|https://github.com/nabakdev/sibondt-kernel/tree/main/pub/stable|g" package/luci-app-amlogic/root/etc/config/amlogic
+echo "CONFIG_PACKAGE_luci-theme-argon=y" >>.config
 
 # coolsnowwolf default software package replaced with Lienol related software package
 # rm -rf feeds/packages/utils/{containerd,libnetwork,runc,tini}
