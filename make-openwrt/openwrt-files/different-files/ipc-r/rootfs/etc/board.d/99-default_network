@@ -1,6 +1,6 @@
-# The phy interfaces for Radxa E25 is
-# eth0(2.5G) for lan
-# eth1(2.5G) for wan
+# The default order of phy interfaces for ipc is
+# eth1(1G) eth0(2.5G) eth3(1G) eth2(2.5G)eth4(1G)eth5(1G)
+# Reset to 0 1 2 3 for intuitive
 
 . /lib/functions/uci-defaults.sh
 . /lib/functions/system.sh
@@ -19,18 +19,8 @@ generate_mac()
         local mac_grp_5="52:54:ab:"
         local mac_grp_cnt=6
 
-        # get the cpu/emmc/sd unique id
-        local sd_hash
-	local cpusn=$(cat /proc/cpuinfo | grep 'Serial' | awk '{print $3}')
-	if [ -n "$cpusn" ];then
-            sd_hash=$(echo $cpusn | sha256sum | cut -f1) 
-        elif [ -f "/sys/class/block/mmcblk1/device/cid" ];then
-            sd_hash=$(sha256sum /sys/class/block/mmcblk1/device/cid | cut -f1) 
-	elif [ -f "/sys/class/block/mmcblk0/device/cid" ];then
-            sd_hash=$(sha256sum /sys/class/block/mmcblk0/device/cid | cut -f1) 
-	else
-            sd_hash=$(dd if=/dev/zero bs=1 count=68 | sha256sum | cut -f1) 
-	fi
+        # get the sd/emmc unique id
+        local sd_hash=$(sha256sum /sys/class/block/mmcblk1/device/cid | cut -f1) 
 
         # get mac address head
         local dice=${mac_grp_cnt}$(echo $sd_hash | tr -d '[a-f]' | cut -b 1-6)
@@ -57,17 +47,14 @@ swap_interface()
 	ip link set dev $eth_b up
 }
 
+# Swap eth0 & eth1, eth2 & eth3
+[ -d /sys/devices/platform/fe160000.pcie/pci0001:10/0001:10:00.0/0001:11:00.0/0001:12:01.0/0001:13:00.0/net/eth0 ] && swap_interface "eth0" "eth1"
+
 # Init LAN and WAN
 json_is_a network object && exit 0
 LAN_MAC=$(generate_mac)
 WAN_MAC=$(macaddr_add $LAN_MAC +1)
-
-# pcie3x2: eth0 3c080000
-# pcie2x1: eth1 3c000000
-if [ -d '/sys/devices/platform/3c0000000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/net/eth0' ];then
-	swap_interface "eth0" "eth1"
-fi
-ucidef_set_interfaces_lan_wan 'eth0' 'eth1'
+ucidef_set_interfaces_lan_wan 'eth3 eth1 eth2 eth4 eth5' 'eth0'
 ucidef_set_interface_macaddr "lan" $LAN_MAC
 ucidef_set_interface_macaddr "wan" $WAN_MAC
 
