@@ -22,7 +22,7 @@ on:
       releases_keep_latest:
         description: "How many latest releases to keep."
         required: false
-        default: "4"
+        default: "2"
         type: choice
         options:
           - 30
@@ -41,7 +41,7 @@ on:
       releases_keep_keyword:
         description: "Keyword of the keep releases."
         required: false
-        default: "s9xxx/kernel"
+        default: "v0/_save_/kernel_"
       delete_workflows:
         description: "Delete workflows records?"
         required: true
@@ -71,9 +71,9 @@ on:
         required: false
         default: ""
       out_log:
-        description: "Output a list log for each step?"
+        description: "Output detailed JSON logs."
         required: false
-        default: false
+        default: true
         type: boolean
 
 env:
