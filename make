@@ -84,7 +84,7 @@ script_repo="https://github.com/ophub/luci-app-amlogic/tree/main/luci-app-amlogi
 script_repo="${script_repo//tree\/main/trunk}"
 
 # Set the kernel download repository from github.com
-kernel_repo="https://github.com/ophub/kernel"
+kernel_repo="https://github.com/nabakdev/sibondt-kernel"
 # Set the tags(kernel_xxx) of the default kernel that can be replaced via the [ -u ] parameter
 default_tags="stable"
 # Set the tags(kernel_xxx) of the specific kernel, such as 5.15.y, 6.1.y, etc.
