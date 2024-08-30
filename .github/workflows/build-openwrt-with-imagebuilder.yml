@@ -72,6 +72,7 @@ on:
           - rk3318-box
           - rock5b
           - rock5c
+          - ruisen-box
           - s905
           - s905-beelink-mini
           - s905-mxqpro-plus
@@ -173,7 +174,7 @@ on:
       openwrt_kernel:
         description: "Select kernel version"
         required: false
-        default: "6.6.y"
+        default: "6.1.y_6.6.y"
         type: choice
         options:
           - 5.4.y
